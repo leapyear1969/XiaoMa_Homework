@@ -4,6 +4,9 @@
 
 <img width="591" height="249" alt="image" src="https://github.com/user-attachments/assets/666d87e3-0da6-4425-bb24-3dc281ed9ffc" />
 
+<img width="878" height="1186" alt="image" src="https://github.com/user-attachments/assets/6a24070e-8829-44a9-86d7-795b5ae7357e" />
+
+
 
 ## 功能特色
 - 支持分别生成语文、数学、英语三科作业，也可一键生成“每日作业”合订版。
