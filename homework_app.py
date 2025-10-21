@@ -34,6 +34,51 @@ CHINESE_FONT_NAME = "STSong-Light"
 PINYIN_FONT_NAME = "STSong-Light"
 ENGLISH_FONT_NAME = "Helvetica"
 
+# Color palette for random coloring of characters/words
+COLOR_PALETTE_HEX = [
+    "#333333",  # Graphite Gray
+    "#4A586E",  # Gray Blue
+    "#B8A89F",  # Warm Gray
+    "#9AA57C",  # Olive Gray
+    "#A8B97A",  # Bamboo Leaf
+    "#6A7BA2",  # Slate Blue
+    "#8BA3C7",  # Indigo Light
+    "#B56547",  # Brick
+    "#C47F5A",  # Clay
+    "#B7A9CF",  # Lavender Gray
+    "#D7A9E3",  # Lilac Mist
+]
+
+def _hex_to_rgb01(hex_str: str) -> tuple[float, float, float]:
+    """Convert #RRGGBB hex to RGB floats in [0,1]."""
+    hex_clean = hex_str.strip().lstrip('#')
+    r = int(hex_clean[0:2], 16) / 255.0
+    g = int(hex_clean[2:4], 16) / 255.0
+    b = int(hex_clean[4:6], 16) / 255.0
+    return r, g, b
+
+def _lighten_hex(hex_str: str, factor: float = 0.55):
+    """Return a reportlab color blended toward white by `factor` [0..1]."""
+    factor = max(0.0, min(1.0, factor))
+    r, g, b = _hex_to_rgb01(hex_str)
+    r_l = r + (1.0 - r) * factor
+    g_l = g + (1.0 - g) * factor
+    b_l = b + (1.0 - b) * factor
+    return colors.Color(r_l, g_l, b_l)
+
+def _random_unique_palette(n: int) -> list[str]:
+    """Return at least n hex colors by shuffling the palette (repeat after cycle)."""
+    base = COLOR_PALETTE_HEX[:]
+    random.shuffle(base)
+    if n <= len(base):
+        return base[:n]
+    # Need more than palette size: repeat shuffled cycles
+    out: list[str] = []
+    while len(out) < n:
+        random.shuffle(base)
+        out.extend(base)
+    return out[:n]
+
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -242,6 +287,7 @@ class HanziPracticeRow(Flowable):
         self.outer_color = colors.HexColor("#2ead6f")
         self.guide_color = colors.HexColor("#9fdcb8")
         self.pinyin_border_color = colors.HexColor("#2ead6f")
+        # These colors may be overridden per-row from the palette
         self.primary_text_color = colors.HexColor("#147a4c")
         self.secondary_text_color = colors.HexColor("#8bcf9d")
         self.pinyin_text_color = colors.HexColor("#147a4c")
@@ -347,7 +393,9 @@ class FourLineWordPractice(Flowable):
         self.total_height = self.copies * self.block_height + (self.copies - 1) * self.gap
         self.line_color_primary = colors.HexColor("#4b5563")
         self.line_color_secondary = colors.HexColor("#9ca3af")
-        self.word_color = colors.HexColor("#ec6f8e")
+        # Primary color for the first word and a lighter trace color for copies
+        self.word_color_primary = colors.HexColor("#ec6f8e")
+        self.word_color_trace = _lighten_hex("#ec6f8e", 0.65)
         self.word_font = ENGLISH_FONT_NAME
         self.word_font_size = self.line_height * 1.15 + 9
 
@@ -372,12 +420,21 @@ class FourLineWordPractice(Flowable):
                 canvas.setDash()
                 canvas.line(0, y, self.width, y)
 
+            # Draw the word once in strong color and 4 additional trace copies
+            # evenly distributed across the width (only on the first copy row).
             if copy_idx == 0 and self.word:
-                canvas.setFillColor(self.word_color)
                 canvas.setFont(self.word_font, self.word_font_size)
                 baseline = y_base + self.line_height
-                x = 2
-                canvas.drawString(x, baseline, self.word)
+
+                total = 5  # 1 primary + 4 trace copies
+                segment = self.width / total
+                for i in range(total):
+                    color = self.word_color_primary if i == 0 else self.word_color_trace
+                    canvas.setFillColor(color)
+                    center_x = (i + 0.5) * segment
+                    text_w = pdfmetrics.stringWidth(self.word, self.word_font, self.word_font_size)
+                    x = max(2, center_x - text_w / 2)
+                    canvas.drawString(x, baseline, self.word)
 
         canvas.restoreState()
 
@@ -395,6 +452,7 @@ class EnglishWordPracticeBlock(Flowable):
         width: float,
         copies: int = 1,
         line_height: float | None = None,
+        base_color_hex: str | None = None,
     ) -> None:
         ensure_reportlab()
         super().__init__()
@@ -410,6 +468,10 @@ class EnglishWordPracticeBlock(Flowable):
             copies=copies,
             line_height=self.line_height,
         )
+        # Apply per-word color from palette if provided
+        if base_color_hex:
+            self.grid.word_color_primary = colors.HexColor(base_color_hex)
+            self.grid.word_color_trace = _lighten_hex(base_color_hex, 0.65)
         self._grid_size: tuple[float, float] = (0.0, 0.0)
 
     def wrap(self, available_width: float, available_height: float) -> tuple[float, float]:  # noqa: D401
@@ -470,9 +532,16 @@ def _build_chinese_section(
     if heading_text:
         story.append(Paragraph(heading_text, styles["heading"]))
         story.append(Spacer(1, 0.3 * cm))
+    # Assign a unique random color per character for the glyphs
+    base_colors = _random_unique_palette(len(char_list))
     for idx, hanzi in enumerate(char_list, start=1):
         pinyin_text = _pinyin_for_char(hanzi)
-        _add_chinese_practice_row(story, hanzi, pinyin_text)
+        row = HanziPracticeRow(hanzi, pinyin_text)
+        base_hex = base_colors[idx - 1]
+        row.primary_text_color = colors.HexColor(base_hex)
+        row.secondary_text_color = _lighten_hex(base_hex, 0.6)
+        row.pinyin_text_color = row.primary_text_color
+        story.append(row)
         if idx != len(char_list):
             story.append(Spacer(1, 0.22 * cm))
     story.append(Spacer(1, 0.4 * cm))
@@ -602,6 +671,8 @@ def _build_english_section(
     grid_width_pt = min(grid_width_pt, max_width_per_column)
     line_height = max(0.3, line_height_cm) * cm
 
+    # Assign a unique random color per word for coloring + traces
+    base_colors = _random_unique_palette(len(word_list))
     blocks: List[EnglishWordPracticeBlock] = []
     for index, item in enumerate(word_list, start=1):
         word = item.get("word", "").strip()
@@ -613,6 +684,7 @@ def _build_english_section(
             width=grid_width_pt,
             copies=copies,
             line_height=line_height,
+            base_color_hex=base_colors[index - 1],
         )
         blocks.append(block)
 
