@@ -2,9 +2,26 @@
 
 该项目是一个基于 Tkinter 的桌面小工具，可以一键生成包含语文、数学、英语练习的 PDF 作业单，方便家长或老师为孩子安排每日练习。应用会根据题库与随机算法自动出题，并按当前日期命名生成的文件。
 
-<img width="591" height="249" alt="image" src="https://github.com/user-attachments/assets/666d87e3-0da6-4425-bb24-3dc281ed9ffc" />
+<img width="985" height="389" alt="image" src="https://github.com/user-attachments/assets/faafaab5-b222-4bb0-a85c-6fc8f5f8b246" />
 
-<img width="878" height="1186" alt="image" src="https://github.com/user-attachments/assets/6a24070e-8829-44a9-86d7-795b5ae7357e" />
+## 2025/11/08 功能更新
+- 英语作业增加单词的长度自适应，不会因为单词过长而出现打印错乱的问题
+- 语文作业增加“普通/初级”两种模型，并增加笔画描红
+- 数学作业增加自定义数值以内的加减法计算
+
+### 详细设计逻辑
+- 语文·练字模式
+  - 新增“普通/初级”两种模式的最终行为：
+    - 普通：仅显示拼音，且第一个格子提供示例汉字，其余格子留空，便于学生自行书写。
+    - 初级：第一个格子显示完整汉字；后续格子按“累计笔画”逐步演示，透明度 0.7，超过总笔画数后留空。
+  - 笔画方向修复：统一将 MakeMeAHanzi 路径转换到笛卡尔坐标并在格子中心做一次最终镜像，杜绝上下颠倒（含二次/三次贝塞尔控制点）。
+  - 笔画位置与比例修复：缩放与居中一律基于“整字包围盒”，逐笔演示时不再出现第一笔被放大的问题，位置与完整字保持一致。
+  - 拼音显示修复：拼音改用拉丁字体（优先 Arial/Segoe UI/Calibri/Verdana/Tahoma/Times），正确显示声调。
+  - 资源管理：自动下载/缓存 makemeahanzi/graphics.txt；网络失败时安全回退不影响生成。
+    
+- 语文·选字逻辑
+  - 保留“初级”筛选（依赖 hanzi_metadata.csv）：优先筛选 笔画≤8、freq_rank≤2000、非多音、基础部首、语义类为「生活物体/基本动作/自然现象」；若数据不足则回退到 yuwen.txt 随机。
+
 
 ## 2025/10/21 为了避免彩色墨盒消耗不均匀，增加彩色字体库，这样保证了消耗的均匀。
 ```python
@@ -23,6 +40,15 @@ colors = [
 ]
 
 ```
+
+
+
+
+
+<img width="903" height="1166" alt="image" src="https://github.com/user-attachments/assets/a64954e1-8736-46c2-84aa-24af3ac98fed" />
+
+
+
 
 ## 功能特色
 - 支持分别生成语文、数学、英语三科作业，也可一键生成“每日作业”合订版。
