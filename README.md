@@ -6,7 +6,23 @@
 
 <img width="878" height="1186" alt="image" src="https://github.com/user-attachments/assets/6a24070e-8829-44a9-86d7-795b5ae7357e" />
 
+## 2025/10/21 为了避免彩色墨盒消耗不均匀，增加彩色字体库，这样保证了消耗的均匀。
+```python
+colors = [
+    {"name": "Graphite Gray", "hex": "#333333", "rgb": (51, 51, 51)},
+    {"name": "Gray Blue", "hex": "#4A586E", "rgb": (74, 88, 110)},
+    {"name": "Warm Gray", "hex": "#B8A89F", "rgb": (184, 168, 159)},
+    {"name": "Olive Gray", "hex": "#9AA57C", "rgb": (154, 165, 124)},
+    {"name": "Bamboo Leaf", "hex": "#A8B97A", "rgb": (168, 185, 122)},
+    {"name": "Slate Blue", "hex": "#6A7BA2", "rgb": (106, 123, 162)},
+    {"name": "Indigo Light", "hex": "#8BA3C7", "rgb": (139, 163, 199)},
+    {"name": "Brick", "hex": "#B56547", "rgb": (181, 101, 71)},
+    {"name": "Clay", "hex": "#C47F5A", "rgb": (196, 127, 90)},
+    {"name": "Lavender Gray", "hex": "#B7A9CF", "rgb": (183, 169, 207)},
+    {"name": "Lilac Mist", "hex": "#D7A9E3", "rgb": (215, 169, 227)}
+]
 
+```
 
 ## 功能特色
 - 支持分别生成语文、数学、英语三科作业，也可一键生成“每日作业”合订版。
