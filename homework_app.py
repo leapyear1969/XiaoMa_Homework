@@ -13,6 +13,7 @@ import json
 import math
 import random
 import sys
+from ctypes import windll
 from datetime import date
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List
@@ -1234,6 +1235,8 @@ def generate_homework(
         doc = SimpleDocTemplate(str(output_path), **PAGE_SETUP)
         story = _document_preamble("每日作业")
 
+        first_subject = True
+
         if "chinese" in subjects:
             chinese_chars = _select_chinese_characters_with_level(
                 hanzi_level, count=chinese_count,
@@ -1243,14 +1246,20 @@ def generate_homework(
                 heading_text=None,
                 enable_stroke_demo=hanzi_level.startswith("初"),
             )
+            first_subject = False
         if "math" in subjects:
+            if not first_subject:
+                story.append(PageBreak())
             math_problems = _generate_math_problems(math_count, math_max)
             _build_math_section(
                 story, math_problems,
                 available_width=doc.width, heading_text=None,
                 columns=math_columns,
             )
+            first_subject = False
         if "english" in subjects:
+            if not first_subject:
+                story.append(PageBreak())
             english_words = _select_english_words(level_clean, count=english_count)
             _build_english_section(
                 story, english_words, level_clean,
@@ -1294,6 +1303,38 @@ def generate_homework(
 # Tkinter GUI Application
 # ===================================================================
 
+_UI_PAGE = "#F4F6F8"
+_UI_SURFACE = "#FFFFFF"
+_UI_BORDER = "#E5E7EB"
+_UI_PRIMARY = "#2563EB"
+_UI_PRIMARY_HOVER = "#1D4ED8"
+_UI_PRIMARY_SOFT = "#EFF6FF"
+_UI_TEXT = "#111827"
+_UI_MUTED = "#4B5563"
+_UI_FONT = "Microsoft YaHei UI"
+
+
+def _enable_win_dpi_awareness() -> None:
+    """Enable per-monitor DPI awareness so Tk text renders sharply on Windows."""
+    if sys.platform != "win32":
+        return
+    try:
+        # 2 = PROCESS_PER_MONITOR_DPI_AWARE (Windows 8.1+)
+        windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except Exception:
+        pass
+    try:
+        windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
+def _ui_font(size: int, *, bold: bool = False) -> tuple[str, int, str]:
+    """Return a DPI-friendly integer point-size font tuple."""
+    return (_UI_FONT, size, "bold" if bold else "normal")
+
+
 class HomeworkGeneratorApp:
     """Tkinter GUI for the Daily Homework Generator.
 
@@ -1303,9 +1344,13 @@ class HomeworkGeneratorApp:
     """
 
     def __init__(self) -> None:
+        _enable_win_dpi_awareness()
         self.root = tk.Tk()
         self.root.title("每日作业生成器")
-        self.root.resizable(False, False)
+        self.root.minsize(760, 420)
+        self.root.resizable(True, True)
+        self.root.configure(bg=_UI_PAGE)
+        self.root.option_add("*Font", _ui_font(10))
 
         # --- Shared settings ---
         self.level_var = tk.StringVar(value="A1")
@@ -1318,129 +1363,412 @@ class HomeworkGeneratorApp:
         self.adv_english_var = tk.BooleanVar(value=True)
         self.adv_output_mode = tk.StringVar(value="merged")
 
+        self._hint_labels: list[tk.Label] = []
         self._build_ui()
+        self.root.bind("<Configure>", self._on_resize, add="+")
 
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
 
-    def _build_ui(self) -> None:
+    def _configure_styles(self) -> None:
         style = ttk.Style()
-        style.configure("TButton", padding=6, font=("Microsoft YaHei", 12))
-        style.configure("TLabel", font=("Microsoft YaHei", 11))
-        style.configure("TCheckbutton", font=("Microsoft YaHei", 11))
-        style.configure("TRadiobutton", font=("Microsoft YaHei", 11))
+        style.theme_use("clam")
+        style.configure("Field.TCombobox", font=_ui_font(10), padding=6)
+        style.configure("Field.TEntry", font=_ui_font(10), padding=6)
 
-        container = ttk.Frame(self.root, padding=20)
-        container.grid(row=0, column=0, sticky="nsew")
+    def _card(self, parent: tk.Widget, *, title: str | None = None) -> tk.Frame:
+        shell = tk.Frame(parent, bg=_UI_PAGE)
+        shell.pack(fill="x", pady=(0, 12))
+        panel = tk.Frame(
+            shell,
+            bg=_UI_SURFACE,
+            highlightbackground=_UI_BORDER,
+            highlightthickness=1,
+        )
+        panel.pack(fill="x", expand=True)
+        body = tk.Frame(panel, bg=_UI_SURFACE, padx=20, pady=16)
+        body.pack(fill="both", expand=True)
+        if title:
+            tk.Label(
+                body,
+                text=title,
+                font=_ui_font(12, bold=True),
+                fg=_UI_TEXT,
+                bg=_UI_SURFACE,
+                anchor="w",
+            ).pack(fill="x", pady=(0, 12))
+        return body
+
+    def _field_cell(self, parent: tk.Frame, label: str, column: int) -> tk.Frame:
+        cell = tk.Frame(parent, bg=_UI_SURFACE)
+        cell.grid(row=0, column=column, sticky="nsew", padx=(0, 16 if column < 2 else 0))
+        parent.columnconfigure(column, weight=1)
+        tk.Label(
+            cell,
+            text=label,
+            font=_ui_font(10),
+            fg=_UI_MUTED,
+            bg=_UI_SURFACE,
+            anchor="w",
+        ).pack(fill="x", pady=(0, 6))
+        return cell
+
+    def _button(
+        self,
+        parent: tk.Widget,
+        text: str,
+        command: Callable[[], None],
+        *,
+        primary: bool = True,
+    ) -> tk.Label:
+        bg = _UI_PRIMARY if primary else _UI_SURFACE
+        fg = "#FFFFFF" if primary else _UI_TEXT
+        hover = _UI_PRIMARY_HOVER if primary else "#F9FAFB"
+        btn = tk.Label(
+            parent,
+            text=text,
+            font=_ui_font(10, bold=primary),
+            fg=fg,
+            bg=bg,
+            padx=16,
+            pady=8,
+            cursor="hand2",
+            highlightbackground=_UI_BORDER if not primary else _UI_PRIMARY,
+            highlightthickness=0 if primary else 1,
+        )
+        btn.bind("<Button-1>", lambda _e: command())
+        btn.bind("<Enter>", lambda _e: btn.configure(bg=hover))
+        btn.bind("<Leave>", lambda _e: btn.configure(bg=bg))
+        return btn
+
+    def _subject_chip(
+        self,
+        parent: tk.Frame,
+        *,
+        glyph: str,
+        color: str,
+        title: str,
+        subtitle: str,
+        variable: tk.BooleanVar,
+    ) -> None:
+        wrap = tk.Frame(parent, bg=_UI_SURFACE)
+        wrap.pack(side="left", fill="both", expand=True, padx=(0, 10))
+
+        card = tk.Frame(
+            wrap,
+            bg=_UI_SURFACE,
+            highlightbackground=_UI_BORDER,
+            highlightthickness=1,
+            cursor="hand2",
+        )
+        card.pack(fill="both", expand=True)
+
+        mark = tk.Label(
+            card,
+            text="✓",
+            font=_ui_font(9, bold=True),
+            fg="#FFFFFF",
+            bg=_UI_PRIMARY,
+            padx=4,
+            pady=1,
+        )
+        inner = tk.Frame(card, bg=_UI_SURFACE)
+        inner.pack(fill="both", expand=True, padx=14, pady=12)
+
+        badge = tk.Label(
+            inner,
+            text=glyph,
+            font=_ui_font(11, bold=True),
+            fg="#FFFFFF",
+            bg=color,
+            width=2,
+            pady=4,
+        )
+        badge.pack(side="left", padx=(0, 12))
+
+        texts = tk.Frame(inner, bg=_UI_SURFACE)
+        texts.pack(side="left", fill="both", expand=True)
+        title_lbl = tk.Label(
+            texts,
+            text=title,
+            font=_ui_font(10, bold=True),
+            fg=_UI_TEXT,
+            bg=_UI_SURFACE,
+            anchor="w",
+        )
+        title_lbl.pack(anchor="w")
+        desc_lbl = tk.Label(
+            texts,
+            text=subtitle,
+            font=_ui_font(10),
+            fg=_UI_MUTED,
+            bg=_UI_SURFACE,
+            anchor="w",
+        )
+        desc_lbl.pack(anchor="w", pady=(2, 0))
+
+        clickables = (card, inner, badge, texts, title_lbl, desc_lbl)
+
+        def paint(*_args: object) -> None:
+            on = variable.get()
+            bg = _UI_PRIMARY_SOFT if on else _UI_SURFACE
+            border = _UI_PRIMARY if on else _UI_BORDER
+            card.configure(bg=bg, highlightbackground=border)
+            inner.configure(bg=bg)
+            texts.configure(bg=bg)
+            title_lbl.configure(bg=bg)
+            desc_lbl.configure(bg=bg)
+            if on:
+                mark.place(relx=1.0, x=-8, y=8, anchor="ne")
+            else:
+                mark.place_forget()
+
+        def toggle(_event: tk.Event | None = None) -> None:
+            variable.set(not variable.get())
+
+        for w in clickables:
+            w.bind("<Button-1>", toggle)
+        mark.bind("<Button-1>", toggle)
+        variable.trace_add("write", paint)
+        paint()
+
+    def _segmented(
+        self,
+        parent: tk.Frame,
+        options: list[tuple[str, str]],
+        variable: tk.StringVar,
+    ) -> tk.Frame:
+        bar = tk.Frame(
+            parent,
+            bg="#F3F4F6",
+            highlightbackground=_UI_BORDER,
+            highlightthickness=1,
+        )
+        labels: list[tk.Label] = []
+
+        def sync(*_args: object) -> None:
+            current = variable.get()
+            for lbl, (_, value) in zip(labels, options):
+                active = current == value
+                lbl.configure(
+                    bg=_UI_SURFACE if active else "#F3F4F6",
+                    fg=_UI_PRIMARY if active else _UI_MUTED,
+                    font=_ui_font(10, bold=active),
+                )
+
+        for idx, (text, value) in enumerate(options):
+            if idx:
+                tk.Frame(bar, bg=_UI_BORDER, width=1).pack(side="left", fill="y", pady=5)
+            lbl = tk.Label(
+                bar,
+                text=text,
+                font=_ui_font(10),
+                fg=_UI_MUTED,
+                bg="#F3F4F6",
+                padx=14,
+                pady=7,
+                cursor="hand2",
+            )
+            lbl.pack(side="left")
+            lbl.bind("<Button-1>", lambda _e, v=value: variable.set(v))
+            labels.append(lbl)
+
+        variable.trace_add("write", sync)
+        sync()
+        return bar
+
+    def _refresh_text_wrap(self) -> None:
+        width = max(400, self.root.winfo_width() - 80)
+        for lbl in self._hint_labels:
+            lbl.configure(wraplength=width)
+
+    def _on_resize(self, event: tk.Event) -> None:
+        if event.widget is not self.root:
+            return
+        self._refresh_text_wrap()
+
+    def _build_ui(self) -> None:
+        self._configure_styles()
+
+        outer = tk.Frame(self.root, bg=_UI_PAGE)
+        outer.pack(fill="both", expand=True)
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        r = 0  # row counter
+        header = tk.Frame(outer, bg=_UI_PAGE, padx=24, pady=20)
+        header.pack(fill="x")
+        tk.Label(
+            header,
+            text="每日作业生成器",
+            font=_ui_font(15, bold=True),
+            fg=_UI_TEXT,
+            bg=_UI_PAGE,
+            anchor="w",
+        ).pack(side="left")
+        tk.Label(
+            header,
+            text="语文 · 数学 · 英语  PDF 一键生成",
+            font=_ui_font(10),
+            fg=_UI_MUTED,
+            bg=_UI_PAGE,
+            anchor="w",
+        ).pack(side="left", padx=(12, 0), pady=(4, 0))
 
-        # ----- Shared settings area -----
-        ttk.Label(container, text="英语词汇等级：").grid(
-            row=r, column=0, padx=10, pady=(0, 12), sticky="e",
-        )
-        level_combo = ttk.Combobox(
-            container, textvariable=self.level_var,
-            values=("A1", "A2", "B1", "B2"), state="readonly", width=6,
-        )
-        level_combo.grid(row=r, column=1, padx=10, pady=(0, 12), sticky="w")
-        r += 1
+        container = tk.Frame(outer, bg=_UI_PAGE, padx=24, pady=16)
+        container.pack(fill="both", expand=True)
 
-        ttk.Label(container, text="语文汉字等级：").grid(
-            row=r, column=0, padx=10, pady=(0, 12), sticky="e",
-        )
-        hanzi_combo = ttk.Combobox(
-            container, textvariable=self.hanzi_level_var,
-            values=("普通", "初级"), state="readonly", width=6,
-        )
-        hanzi_combo.grid(row=r, column=1, padx=10, pady=(0, 12), sticky="w")
-        r += 1
+        # ----- Global settings (horizontal) -----
+        settings = self._card(container, title="全局设置")
+        fields = tk.Frame(settings, bg=_UI_SURFACE)
+        fields.pack(fill="x")
 
-        ttk.Label(container, text="数学范围上限：").grid(
-            row=r, column=0, padx=10, pady=(0, 12), sticky="e",
-        )
-        ttk.Entry(container, textvariable=self.math_max_var, width=8).grid(
-            row=r, column=1, padx=10, pady=(0, 12), sticky="w",
-        )
-        r += 1
+        english = self._field_cell(fields, "英语词汇等级", 0)
+        ttk.Combobox(
+            english,
+            textvariable=self.level_var,
+            values=("A1", "A2", "B1", "B2"),
+            state="readonly",
+            style="Field.TCombobox",
+        ).pack(fill="x")
 
-        # ----- Basic mode -----
-        ttk.Button(
-            container, text="生成全部作业（基础模式）",
-            command=self._handle_basic_mode,
-        ).grid(row=r, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
-        r += 1
+        hanzi = self._field_cell(fields, "语文汉字等级", 1)
+        ttk.Combobox(
+            hanzi,
+            textvariable=self.hanzi_level_var,
+            values=("普通", "初级"),
+            state="readonly",
+            style="Field.TCombobox",
+        ).pack(fill="x")
 
-        # ----- Separator -----
-        ttk.Separator(container, orient="horizontal").grid(
-            row=r, column=0, columnspan=2, padx=10, pady=(10, 10), sticky="ew",
-        )
-        r += 1
+        math_cell = self._field_cell(fields, "数学范围上限", 2)
+        ttk.Entry(
+            math_cell,
+            textvariable=self.math_max_var,
+            style="Field.TEntry",
+        ).pack(fill="x")
+
+        # ----- Basic mode (horizontal action row) -----
+        basic = self._card(container, title="基础模式")
+        basic_row = tk.Frame(basic, bg=_UI_SURFACE)
+        basic_row.pack(fill="x")
+        basic_row.columnconfigure(0, weight=1)
+
+        copy = tk.Frame(basic_row, bg=_UI_SURFACE)
+        copy.grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            copy,
+            text="生成语文、数学、英语三科作业",
+            font=_ui_font(10, bold=True),
+            fg=_UI_TEXT,
+            bg=_UI_SURFACE,
+            anchor="w",
+        ).pack(anchor="w")
+        tk.Label(
+            copy,
+            text="合并输出为一张 A4 PDF",
+            font=_ui_font(10),
+            fg=_UI_MUTED,
+            bg=_UI_SURFACE,
+            anchor="w",
+        ).pack(anchor="w", pady=(2, 0))
+
+        self._button(
+            basic_row,
+            "生成全部作业",
+            self._handle_basic_mode,
+        ).grid(row=0, column=1, sticky="e", padx=(16, 0))
 
         # ----- Advanced mode -----
-        ttk.Label(
-            container, text="— 高级选项（单独生成各科作业）—",
-            font=("Microsoft YaHei", 12, "bold"),
-        ).grid(row=r, column=0, columnspan=2, padx=10, pady=(0, 8))
-        r += 1
+        advanced = self._card(container, title="高级选项")
+        tk.Label(
+            advanced,
+            text="选择科目（点击卡片切换）",
+            font=_ui_font(10),
+            fg=_UI_MUTED,
+            bg=_UI_SURFACE,
+            anchor="w",
+        ).pack(anchor="w", pady=(0, 10))
 
-        ttk.Checkbutton(
-            container, text="语文作业", variable=self.adv_chinese_var,
-        ).grid(row=r, column=0, columnspan=2, padx=30, pady=(0, 4), sticky="w")
-        r += 1
-
-        ttk.Checkbutton(
-            container, text="数学作业", variable=self.adv_math_var,
-        ).grid(row=r, column=0, columnspan=2, padx=30, pady=(0, 4), sticky="w")
-        r += 1
-
-        ttk.Checkbutton(
-            container, text="英语作业", variable=self.adv_english_var,
-        ).grid(row=r, column=0, columnspan=2, padx=30, pady=(0, 8), sticky="w")
-        r += 1
-
-        ttk.Label(container, text="输出模式：").grid(
-            row=r, column=0, columnspan=2, padx=10, pady=(0, 4), sticky="w",
+        chips = tk.Frame(advanced, bg=_UI_SURFACE)
+        chips.pack(fill="x", pady=(0, 16))
+        self._subject_chip(
+            chips,
+            glyph="语",
+            color="#EF4444",
+            title="语文作业",
+            subtitle="汉字笔画描红",
+            variable=self.adv_chinese_var,
         )
-        r += 1
-
-        ttk.Radiobutton(
-            container, text="合并为一张 PDF",
-            variable=self.adv_output_mode, value="merged",
-        ).grid(row=r, column=0, columnspan=2, padx=40, pady=(0, 4), sticky="w")
-        r += 1
-
-        ttk.Radiobutton(
-            container, text="每科单独 PDF",
-            variable=self.adv_output_mode, value="separate",
-        ).grid(row=r, column=0, columnspan=2, padx=40, pady=(0, 8), sticky="w")
-        r += 1
-
-        ttk.Button(
-            container, text="生成所选作业（高级模式）",
-            command=self._handle_advanced_mode,
-        ).grid(row=r, column=0, columnspan=2, padx=10, pady=(4, 10), sticky="ew")
-        r += 1
-
-        # ----- Hint -----
-        hint_text = (
-            "1. 英语作业等级难度由A1,A2,B1,B2依次提升。\n"
-            "2. 语文作业分为「普通」和「初级」两种等级，初级包含简单"
-            "汉字的笔画描红，普通则需要在田字格中书写。\n"
-            "3. 数学作业提供自定义数值范围的加减法练习题，默认值"
-            "为100。\n"
-            "4. 高级模式可勾选需要的科目，支持单独PDF或合并输出。"
+        self._subject_chip(
+            chips,
+            glyph="数",
+            color="#2563EB",
+            title="数学作业",
+            subtitle="加减法练习",
+            variable=self.adv_math_var,
         )
-        hint = ttk.Label(container, text=hint_text)
-        hint.grid(row=r, column=0, columnspan=2, padx=10, pady=(6, 0), sticky="ew")
-        hint.configure(anchor="center")
-        r += 1
+        self._subject_chip(
+            chips,
+            glyph="英",
+            color="#10B981",
+            title="英语作业",
+            subtitle="单词描红",
+            variable=self.adv_english_var,
+        )
 
-        for col in range(2):
-            container.columnconfigure(col, weight=1)
+        tk.Frame(advanced, bg=_UI_BORDER, height=1).pack(fill="x", pady=(0, 14))
+
+        footer = tk.Frame(advanced, bg=_UI_SURFACE)
+        footer.pack(fill="x")
+        footer.columnconfigure(0, weight=1)
+
+        output = tk.Frame(footer, bg=_UI_SURFACE)
+        output.grid(row=0, column=0, sticky="w")
+        tk.Label(
+            output,
+            text="输出方式",
+            font=_ui_font(10),
+            fg=_UI_MUTED,
+            bg=_UI_SURFACE,
+            anchor="w",
+        ).pack(anchor="w", pady=(0, 6))
+        self._segmented(
+            output,
+            [("每科单独 PDF", "separate"), ("合并为一张 PDF", "merged")],
+            self.adv_output_mode,
+        ).pack(anchor="w")
+
+        self._button(
+            footer,
+            "生成所选作业",
+            self._handle_advanced_mode,
+        ).grid(row=0, column=1, sticky="e", padx=(16, 0))
+
+        # ----- Tips -----
+        tips = self._card(container)
+        tip_lines = (
+            "英语等级 A1 → B2 难度依次提升；语文「初级」含笔画描红，「普通」为田字格书写。",
+            "数学范围为加减法上限，默认 100；高级模式可自选科目与输出方式。",
+        )
+        for line in tip_lines:
+            lbl = tk.Label(
+                tips,
+                text=f"· {line}",
+                font=_ui_font(10),
+                fg=_UI_MUTED,
+                bg=_UI_SURFACE,
+                justify="left",
+                anchor="w",
+            )
+            lbl.pack(fill="x", pady=(0, 4))
+            self._hint_labels.append(lbl)
+
+        self.root.update_idletasks()
+        w = max(780, outer.winfo_reqwidth())
+        h = max(460, outer.winfo_reqheight())
+        self.root.geometry(f"{w}x{h}")
+        self._refresh_text_wrap()
 
     # ------------------------------------------------------------------
     # Validation helpers
