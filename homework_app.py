@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """Daily homework generator GUI application.
 
 Generates subject-specific PDF documents for Chinese, Math, and English homework.
@@ -852,8 +852,8 @@ def _create_math_table(problems: List[str], columns: int, available_width: float
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 3),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
             ]
         )
     )
@@ -905,11 +905,90 @@ def _select_english_words(level: str, count: int = 5) -> List[Dict[str, str]]:
         raise RuntimeError(f"词汇等级 {level.strip().upper()} 的单词不足 {count} 个。")
     return random.sample(words, count)
 
+
+# ---------------------------------------------------------------------------
+# Hanzi selector with beginner-level filtering
+# ---------------------------------------------------------------------------
+
 def _select_chinese_characters_with_level(level: str, count: int = 5) -> List[str]:
-    # 目前“普通/初级”都从 yuwen.txt 随机抽取；后续可在此细化“初级”的筛选
-    return _select_chinese_characters(count)
+    """Select Hanzi with optional beginner filtering using hanzi_metadata.csv.
+
+    - 普通：直接从 yuwen.txt 随机抽样。
+    - 初级：优先使用 hanzi_metadata.csv 进行筛选（若缺失/为空则回退到随机）。
+      条件（尽量满足，可用字段缺失则跳过该字段）：
+        * strokes ≤ 8
+        * freq_rank ≤ 2000
+        * polyphonic 为否
+        * radical 属于基础部首集合（若集合或字段异常则忽略）
+        * semantic ∈ {生活物体, 基本动作, 自然现象}
+    """
+    ensure_pinyin()
+    bank = _load_chinese_chars(YUWEN_BANK)
+    level_s = (level or "").strip()
+    # 支持"初级"或编码乱码形式都识别为初级
+    is_beginner = ("初" in level_s) or level_s.startswith("初")
+    if not is_beginner:
+        return random.sample(bank, min(count, len(bank)))
+
+    meta = _load_hanzi_metadata(HANZI_META)
+    if not meta:
+        return random.sample(bank, min(count, len(bank)))
+
+    beginner_semantics = {"生活物体", "基本动作", "自然现象"}
+    pool: List[str] = []
+    bank_set = set(bank)
+    for row in meta:
+        ch = (row.get("char") or row.get("character") or "").strip()
+        if not ch or ch not in bank_set:
+            continue
+        ok = True
+        # strokes
+        try:
+            strokes = int((row.get("strokes") or "").strip() or "0")
+        except Exception:
+            strokes = 0
+        if strokes and strokes > 8:
+            ok = False
+        # freq
+        try:
+            freq = int((row.get("freq_rank") or row.get("frequency") or "").strip() or "999999")
+        except Exception:
+            freq = 999999
+        if freq and freq > 2000:
+            ok = False
+        # polyphonic
+        poly = row.get("polyphonic") or row.get("multi_pronounce")
+        if poly is not None and _parse_bool(str(poly)):
+            ok = False
+        # radical
+        radical = (row.get("radical") or "").strip()
+        try:
+            if _BEGINNER_COMMON_RADICALS and radical and radical not in _BEGINNER_COMMON_RADICALS:
+                ok = False
+        except Exception:
+            # radicals set may contain mojibake; ignore if unusable
+            pass
+        # semantic
+        semantic = (row.get("semantic") or row.get("category") or "").strip()
+        if semantic and beginner_semantics and (semantic not in beginner_semantics):
+            ok = False
+
+        if ok:
+            pool.append(ch)
+
+    pool = list(dict.fromkeys(pool))  # de-duplicate keep order
+    if len(pool) >= count:
+        return random.sample(pool, count)
+    # fallback: pad from bank
+    need = count - len(pool)
+    rest = [c for c in bank if c not in pool]
+    random.shuffle(rest)
+    return (pool + rest[:max(0, need)])[:count]
 
 
+# ---------------------------------------------------------------------------
+# English section builder
+# ---------------------------------------------------------------------------
 
 def _build_english_section(
     story: List,
@@ -937,7 +1016,8 @@ def _build_english_section(
         story.append(Paragraph(heading_text, styles["heading"]))
         story.append(Spacer(1, 0.12 * cm))
     if show_level_info:
-        story.append(Paragraph(f"???????{level_clean}", styles["info"]))
+        level_label = f"词汇等级：{level_clean}"
+        story.append(Paragraph(level_label, styles["info"]))
         story.append(Spacer(1, 0.1 * cm))
 
     columns = max(1, columns)
@@ -1003,318 +1083,526 @@ def _build_english_section(
     story.append(Spacer(1, 0.35 * cm))
 
 
-def generate_chinese_homework() -> Path:
+# ===================================================================
+# Standalone per-subject PDF generators
+# ===================================================================
+
+def generate_chinese_pdf(
+    hanzi_level: str = "初级",
+    output_path: Path | None = None,
+    count: int = 5,
+) -> Path:
+    """Generate a standalone Chinese homework PDF.
+
+    Args:
+        hanzi_level: ``"初级"`` (with stroke tracing) or ``"普通"``.
+        output_path: Where to write the PDF; auto-named if ``None``.
+        count: Number of Chinese characters to include.
+
+    Returns:
+        Absolute path to the generated PDF file.
+    """
     ensure_reportlab()
     ensure_pinyin()
-    selected = _select_chinese_characters()
-    output_path = ROOT_DIR / f"{date.today().isoformat()}-语文作业.pdf"
+    hanzi_level = (hanzi_level or "初级").strip()
+    selected = _select_chinese_characters_with_level(hanzi_level, count=count)
+    if output_path is None:
+        output_path = ROOT_DIR / f"{date.today().isoformat()}-语文作业.pdf"
     doc = SimpleDocTemplate(str(output_path), **PAGE_SETUP)
     story = _document_preamble("语文作业")
-    _build_chinese_section(story, selected, heading_text=None, enable_stroke_demo=(self.hanzi_level_var.get().startswith("初") if hasattr(self, "hanzi_level_var") else False))
+    _build_chinese_section(
+        story, selected,
+        heading_text=None,
+        enable_stroke_demo=hanzi_level.startswith("初"),
+    )
     doc.build(story)
     return output_path
 
 
-def generate_math_homework() -> Path:
+def generate_math_pdf(
+    math_max: int = 100,
+    output_path: Path | None = None,
+    count: int = 10,
+    columns: int = 2,
+) -> Path:
+    """Generate a standalone Math homework PDF.
+
+    Args:
+        math_max: Upper bound for addition/subtraction values (1–1000).
+        output_path: Where to write the PDF; auto-named if ``None``.
+        count: Number of math problems to generate.
+        columns: Number of columns for the problem grid.
+
+    Returns:
+        Absolute path to the generated PDF file.
+    """
     ensure_reportlab()
-    output_path = ROOT_DIR / f"{date.today().isoformat()}-数学作业.pdf"
+    math_max = max(1, min(1000, int(math_max)))
+    problems = _generate_math_problems(count, math_max)
+    if output_path is None:
+        output_path = ROOT_DIR / f"{date.today().isoformat()}-数学作业.pdf"
     doc = SimpleDocTemplate(str(output_path), **PAGE_SETUP)
     story = _document_preamble("数学作业")
-    problems = _generate_math_problems(10, math_max)
-    _build_math_section(story, problems, available_width=doc.width, heading_text=None)
+    _build_math_section(
+        story, problems,
+        available_width=doc.width, heading_text=None,
+        columns=columns,
+    )
     doc.build(story)
     return output_path
 
 
-def generate_english_homework(level: str) -> Path:
+def generate_english_pdf(
+    level: str = "A1",
+    output_path: Path | None = None,
+    count: int = 5,
+    columns: int = 1,
+) -> Path:
+    """Generate a standalone English homework PDF.
+
+    Args:
+        level: CEFR level — ``"A1"``, ``"A2"``, ``"B1"``, or ``"B2"``.
+        output_path: Where to write the PDF; auto-named if ``None``.
+        count: Number of English words to include.
+        columns: Number of columns for the word grid (1 or 2).
+
+    Returns:
+        Absolute path to the generated PDF file.
+    """
     ensure_reportlab()
     level_clean = level.strip().upper()
-    selected = _select_english_words(level_clean)
-    output_path = ROOT_DIR / f"{date.today().isoformat()}-英语作业.pdf"
+    selected = _select_english_words(level_clean, count=count)
+    if output_path is None:
+        output_path = ROOT_DIR / f"{date.today().isoformat()}-英语作业.pdf"
     doc = SimpleDocTemplate(str(output_path), **PAGE_SETUP)
     story = _document_preamble("英语作业")
     _build_english_section(
-        story,
-        selected,
-        level_clean,
+        story, selected, level_clean,
         available_width=doc.width,
         heading_text=None,
-        copies=1,
-        columns=1,
-        grid_width_cm=None,
-        line_height_cm=0.5,
+        copies=1, columns=columns,
+        grid_width_cm=None, line_height_cm=0.5,
         show_level_info=True,
     )
     doc.build(story)
     return output_path
 
-# --- Overrides to fix generation behavior (Chinese ordinary mode, Math default max) ---
-def generate_chinese_homework() -> Path:  # override with ordinary mode (no strokes)
-    ensure_reportlab()
-    ensure_pinyin()
-    selected = _select_chinese_characters()
-    output_path = ROOT_DIR / f"{date.today().isoformat()}-������ҵ.pdf"
-    doc = SimpleDocTemplate(str(output_path), **PAGE_SETUP)
-    story = _document_preamble("������ҵ")
-    _build_chinese_section(story, selected, heading_text=None, enable_stroke_demo=False)
-    doc.build(story)
-    return output_path
 
+# ===================================================================
+# Unified homework dispatcher
+# ===================================================================
 
-def generate_math_homework() -> Path:  # override to use 100 as default upper bound
-    ensure_reportlab()
-    output_path = ROOT_DIR / f"{date.today().isoformat()}-��ѧ��ҵ.pdf"
-    doc = SimpleDocTemplate(str(output_path), **PAGE_SETUP)
-    story = _document_preamble("��ѧ��ҵ")
-    problems = _generate_math_problems(10, 100)
-    _build_math_section(story, problems, available_width=doc.width, heading_text=None)
-    doc.build(story)
-    return output_path
+def generate_homework(
+    subjects: list[str],
+    output_mode: str,
+    hanzi_level: str = "初级",
+    math_max: int = 100,
+    english_level: str = "A1",
+    chinese_count: int = 5,
+    math_count: int = 10,
+    math_columns: int = 2,
+    english_count: int = 5,
+    english_columns: int = 1,
+) -> list[Path]:
+    """Generate homework PDFs for one or more subjects.
 
+    Args:
+        subjects: Subject keys — ``"chinese"``, ``"math"``, ``"english"``.
+        output_mode: ``"merged"`` → single combined PDF;
+                     ``"separate"`` → one PDF per subject.
+        hanzi_level: ``"初级"`` (with stroke demo) or ``"普通"``.
+        math_max: Upper bound for math problems (1–1000).
+        english_level: ``"A1"`` / ``"A2"`` / ``"B1"`` / ``"B2"``.
+        chinese_count: Number of Chinese characters (default 5).
+        math_count: Number of math problems (default 10).
+        math_columns: Columns for math problem grid (default 2).
+        english_count: Number of English words (default 5).
+        english_columns: Columns for English word grid (default 1).
 
-# Re-define selector with beginner filtering using hanzi_metadata.csv
-def _select_chinese_characters_with_level(level: str, count: int = 5) -> List[str]:
-    """Select Hanzi with optional beginner filtering using hanzi_metadata.csv.
-
-    - 普通：直接从 yuwen.txt 随机抽样。
-    - 初级：优先使用 hanzi_metadata.csv 进行筛选（若缺失/为空则回退到随机）。
-      条件（尽量满足，可用字段缺失则跳过该字段）：
-        * strokes ≤ 8
-        * freq_rank ≤ 2000
-        * polyphonic 为否
-        * radical 属于基础部首集合（若集合或字段异常则忽略）
-        * semantic ∈ {生活物体, 基本动作, 自然现象}
+    Returns:
+        List of absolute paths to the generated PDF file(s).
     """
-    ensure_pinyin()
-    bank = _load_chinese_chars(YUWEN_BANK)
-    level_s = (level or "").strip()
-    # 支持“初级”或编码乱码形式都识别为初级
-    is_beginner = ("初" in level_s) or level_s.startswith("��")
-    if not is_beginner:
-        return random.sample(bank, min(count, len(bank)))
-
-    meta = _load_hanzi_metadata(HANZI_META)
-    if not meta:
-        return random.sample(bank, min(count, len(bank)))
-
-    beginner_semantics = {"生活物体", "基本动作", "自然现象"}
-    pool: List[str] = []
-    bank_set = set(bank)
-    for row in meta:
-        ch = (row.get("char") or row.get("character") or "").strip()
-        if not ch or ch not in bank_set:
-            continue
-        ok = True
-        # strokes
-        try:
-            strokes = int((row.get("strokes") or "").strip() or "0")
-        except Exception:
-            strokes = 0
-        if strokes and strokes > 8:
-            ok = False
-        # freq
-        try:
-            freq = int((row.get("freq_rank") or row.get("frequency") or "").strip() or "999999")
-        except Exception:
-            freq = 999999
-        if freq and freq > 2000:
-            ok = False
-        # polyphonic
-        poly = row.get("polyphonic") or row.get("multi_pronounce")
-        if poly is not None and _parse_bool(str(poly)):
-            ok = False
-        # radical
-        radical = (row.get("radical") or "").strip()
-        try:
-            if _BEGINNER_COMMON_RADICALS and radical and radical not in _BEGINNER_COMMON_RADICALS:
-                ok = False
-        except Exception:
-            # radicals set may contain mojibake; ignore if unusable
-            pass
-        # semantic
-        semantic = (row.get("semantic") or row.get("category") or "").strip()
-        if semantic and beginner_semantics and (semantic not in beginner_semantics):
-            ok = False
-
-        if ok:
-            pool.append(ch)
-
-    pool = list(dict.fromkeys(pool))  # de-duplicate keep order
-    if len(pool) >= count:
-        return random.sample(pool, count)
-    # fallback: pad from bank
-    need = count - len(pool)
-    rest = [c for c in bank if c not in pool]
-    random.shuffle(rest)
-    return (pool + rest[:max(0, need)])[:count]
-
-
-def generate_daily_homework_bundle(level: str, hanzi_level: str, math_max: int = 100) -> Path:
     ensure_reportlab()
     ensure_pinyin()
-    level_clean = level.strip().upper()
+
+    today_str = date.today().isoformat()
+    level_clean = english_level.strip().upper()
     hanzi_level = (hanzi_level or "初级").strip()
-    chinese_chars = _select_chinese_characters_with_level(hanzi_level)
-    math_problems = _generate_math_problems(10, math_max)
-    english_words = _select_english_words(level_clean)
 
-    output_path = ROOT_DIR / f"{date.today().isoformat()}-每日作业.pdf"
-    doc = SimpleDocTemplate(str(output_path), **PAGE_SETUP)
-    story = _document_preamble("每日作业")
-    _build_chinese_section(story, chinese_chars, heading_text=None, enable_stroke_demo=(hanzi_level.startswith("初")))
-    _build_math_section(story, math_problems, available_width=doc.width, heading_text=None)
-    _build_english_section(
-        story,
-        english_words,
-        level_clean,
-        available_width=doc.width,
-        heading_text=None,
-        copies=1,
-        columns=1,
-        grid_width_cm=doc.width / cm,
-        line_height_cm=0.38,
-        show_level_info=False,
-        force_page_break=False,
-    )
-    doc.build(story)
-    return output_path
+    if output_mode == "merged":
+        output_path = ROOT_DIR / f"{today_str}-每日作业.pdf"
+        doc = SimpleDocTemplate(str(output_path), **PAGE_SETUP)
+        story = _document_preamble("每日作业")
 
+        if "chinese" in subjects:
+            chinese_chars = _select_chinese_characters_with_level(
+                hanzi_level, count=chinese_count,
+            )
+            _build_chinese_section(
+                story, chinese_chars,
+                heading_text=None,
+                enable_stroke_demo=hanzi_level.startswith("初"),
+            )
+        if "math" in subjects:
+            math_problems = _generate_math_problems(math_count, math_max)
+            _build_math_section(
+                story, math_problems,
+                available_width=doc.width, heading_text=None,
+                columns=math_columns,
+            )
+        if "english" in subjects:
+            english_words = _select_english_words(level_clean, count=english_count)
+            _build_english_section(
+                story, english_words, level_clean,
+                available_width=doc.width,
+                heading_text=None,
+                copies=1, columns=english_columns,
+                grid_width_cm=doc.width / cm,
+                line_height_cm=0.38,
+                show_level_info=False,
+                force_page_break=False,
+            )
+        doc.build(story)
+        return [output_path]
+    else:
+        # Separate mode — one PDF per subject
+        paths: list[Path] = []
+        if "chinese" in subjects:
+            paths.append(generate_chinese_pdf(
+                hanzi_level,
+                output_path=ROOT_DIR / f"{today_str}-语文作业.pdf",
+                count=chinese_count,
+            ))
+        if "math" in subjects:
+            paths.append(generate_math_pdf(
+                math_max,
+                output_path=ROOT_DIR / f"{today_str}-数学作业.pdf",
+                count=math_count,
+                columns=math_columns,
+            ))
+        if "english" in subjects:
+            paths.append(generate_english_pdf(
+                level_clean,
+                output_path=ROOT_DIR / f"{today_str}-英语作业.pdf",
+                count=english_count,
+                columns=english_columns,
+            ))
+        return paths
+
+
+# ===================================================================
+# Tkinter GUI Application
+# ===================================================================
 
 class HomeworkGeneratorApp:
+    """Tkinter GUI for the Daily Homework Generator.
+
+    Provides:
+    * **Basic mode** — one-click all-subjects merged PDF.
+    * **Advanced mode** — checkbox-per-subject + separate/merged output.
+    """
+
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("每日作业生成器")
         self.root.resizable(False, False)
+
+        # --- Shared settings ---
         self.level_var = tk.StringVar(value="A1")
         self.hanzi_level_var = tk.StringVar(value="初级")
         self.math_max_var = tk.StringVar(value="100")
+
+        # --- Advanced-mode variables ---
+        self.adv_chinese_var = tk.BooleanVar(value=True)
+        self.adv_math_var = tk.BooleanVar(value=True)
+        self.adv_english_var = tk.BooleanVar(value=True)
+        self.adv_output_mode = tk.StringVar(value="merged")
+
         self._build_ui()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
         style = ttk.Style()
         style.configure("TButton", padding=6, font=("Microsoft YaHei", 12))
         style.configure("TLabel", font=("Microsoft YaHei", 11))
+        style.configure("TCheckbutton", font=("Microsoft YaHei", 11))
+        style.configure("TRadiobutton", font=("Microsoft YaHei", 11))
 
         container = ttk.Frame(self.root, padding=20)
         container.grid(row=0, column=0, sticky="nsew")
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        level_label = ttk.Label(container, text="英语词汇等级：")
-        level_label.grid(row=0, column=0, padx=10, pady=(0, 12), sticky="e")
+        r = 0  # row counter
 
-        level_combo = ttk.Combobox(
-            container,
-            textvariable=self.level_var,
-            values=("A1", "A2", "B1", "B2"),
-            state="readonly",
-            width=6,
+        # ----- Shared settings area -----
+        ttk.Label(container, text="英语词汇等级：").grid(
+            row=r, column=0, padx=10, pady=(0, 12), sticky="e",
         )
-        level_combo.grid(row=0, column=1, padx=10, pady=(0, 12), sticky="w")
-        level_combo.set(self.level_var.get())
+        level_combo = ttk.Combobox(
+            container, textvariable=self.level_var,
+            values=("A1", "A2", "B1", "B2"), state="readonly", width=6,
+        )
+        level_combo.grid(row=r, column=1, padx=10, pady=(0, 12), sticky="w")
+        r += 1
 
-        # 数学范围上限输入
-        hanzi_label = ttk.Label(container, text="语文汉字等级：")
-        hanzi_label.grid(row=1, column=0, padx=10, pady=(0, 12), sticky="e")
-        hanzi_combo = ttk.Combobox(container, textvariable=self.hanzi_level_var, values=("普通", "初级"), state="readonly", width=6)
-        hanzi_combo.grid(row=1, column=1, padx=10, pady=(0, 12), sticky="w")
-        hanzi_combo.set(self.hanzi_level_var.get())
+        ttk.Label(container, text="语文汉字等级：").grid(
+            row=r, column=0, padx=10, pady=(0, 12), sticky="e",
+        )
+        hanzi_combo = ttk.Combobox(
+            container, textvariable=self.hanzi_level_var,
+            values=("普通", "初级"), state="readonly", width=6,
+        )
+        hanzi_combo.grid(row=r, column=1, padx=10, pady=(0, 12), sticky="w")
+        r += 1
 
-        math_label = ttk.Label(container, text="数学范围上限：")
-        math_label.grid(row=2, column=0, padx=10, pady=(0, 12), sticky="e")
-        math_entry = ttk.Entry(container, textvariable=self.math_max_var, width=8)
-        math_entry.grid(row=2, column=1, padx=10, pady=(0, 12), sticky="w")
+        ttk.Label(container, text="数学范围上限：").grid(
+            row=r, column=0, padx=10, pady=(0, 12), sticky="e",
+        )
+        ttk.Entry(container, textvariable=self.math_max_var, width=8).grid(
+            row=r, column=1, padx=10, pady=(0, 12), sticky="w",
+        )
+        r += 1
 
-        generate_btn = ttk.Button(container, text="生成全部作业", command=self._handle_bundle)
-        generate_btn.grid(row=3, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
+        # ----- Basic mode -----
+        ttk.Button(
+            container, text="生成全部作业（基础模式）",
+            command=self._handle_basic_mode,
+        ).grid(row=r, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
+        r += 1
 
-        hint = ttk.Label(container, text="1. 英语作业等级难度由A1,A2,B1,B2依次提升。\n2. 语文作业分为“普通”和“初级”两种等级，初级包含简单汉字的笔画描红，普通则需要在田字格中书写。\n3. 数学作业提供自定义数值范围的加减法练习题，默认值为100。")
-        hint.grid(row=4, column=0, columnspan=2, padx=10, pady=(6, 0), sticky="ew")
+        # ----- Separator -----
+        ttk.Separator(container, orient="horizontal").grid(
+            row=r, column=0, columnspan=2, padx=10, pady=(10, 10), sticky="ew",
+        )
+        r += 1
+
+        # ----- Advanced mode -----
+        ttk.Label(
+            container, text="— 高级选项（单独生成各科作业）—",
+            font=("Microsoft YaHei", 12, "bold"),
+        ).grid(row=r, column=0, columnspan=2, padx=10, pady=(0, 8))
+        r += 1
+
+        ttk.Checkbutton(
+            container, text="语文作业", variable=self.adv_chinese_var,
+        ).grid(row=r, column=0, columnspan=2, padx=30, pady=(0, 4), sticky="w")
+        r += 1
+
+        ttk.Checkbutton(
+            container, text="数学作业", variable=self.adv_math_var,
+        ).grid(row=r, column=0, columnspan=2, padx=30, pady=(0, 4), sticky="w")
+        r += 1
+
+        ttk.Checkbutton(
+            container, text="英语作业", variable=self.adv_english_var,
+        ).grid(row=r, column=0, columnspan=2, padx=30, pady=(0, 8), sticky="w")
+        r += 1
+
+        ttk.Label(container, text="输出模式：").grid(
+            row=r, column=0, columnspan=2, padx=10, pady=(0, 4), sticky="w",
+        )
+        r += 1
+
+        ttk.Radiobutton(
+            container, text="合并为一张 PDF",
+            variable=self.adv_output_mode, value="merged",
+        ).grid(row=r, column=0, columnspan=2, padx=40, pady=(0, 4), sticky="w")
+        r += 1
+
+        ttk.Radiobutton(
+            container, text="每科单独 PDF",
+            variable=self.adv_output_mode, value="separate",
+        ).grid(row=r, column=0, columnspan=2, padx=40, pady=(0, 8), sticky="w")
+        r += 1
+
+        ttk.Button(
+            container, text="生成所选作业（高级模式）",
+            command=self._handle_advanced_mode,
+        ).grid(row=r, column=0, columnspan=2, padx=10, pady=(4, 10), sticky="ew")
+        r += 1
+
+        # ----- Hint -----
+        hint_text = (
+            "1. 英语作业等级难度由A1,A2,B1,B2依次提升。\n"
+            "2. 语文作业分为「普通」和「初级」两种等级，初级包含简单"
+            "汉字的笔画描红，普通则需要在田字格中书写。\n"
+            "3. 数学作业提供自定义数值范围的加减法练习题，默认值"
+            "为100。\n"
+            "4. 高级模式可勾选需要的科目，支持单独PDF或合并输出。"
+        )
+        hint = ttk.Label(container, text=hint_text)
+        hint.grid(row=r, column=0, columnspan=2, padx=10, pady=(6, 0), sticky="ew")
         hint.configure(anchor="center")
+        r += 1
 
         for col in range(2):
             container.columnconfigure(col, weight=1)
 
-    def _handle_bundle(self) -> None:
-        level = self.level_var.get().strip().upper() or "A1"
-        self._run_generator(lambda: generate_with_math_limit(level, self.hanzi_level_var.get(), self.math_max_var.get()), "每日作业")
+    # ------------------------------------------------------------------
+    # Validation helpers
+    # ------------------------------------------------------------------
 
-    def _run_generator(self, generator: Callable[[], Path], subject_label: str) -> None:
+    def _validate_math_max(self) -> int | None:
+        """Return the validated math upper-bound, or ``None`` on error.
+
+        Shows a warning dialog when the input is not a positive integer.
+        """
+        raw = (self.math_max_var.get() or "").strip()
+        if not raw:
+            messagebox.showwarning(
+                "输入错误", "请输入数学范围上限（正整数）。", parent=self.root,
+            )
+            return None
         try:
-            output_path = generator()
+            val = int(raw)
+        except ValueError:
+            messagebox.showwarning(
+                "输入错误",
+                f"数学范围上限必须是正整数，当前输入：{raw}",
+                parent=self.root,
+            )
+            return None
+        if val <= 0:
+            messagebox.showwarning(
+                "输入错误",
+                f"数学范围上限必须是正整数，当前输入：{raw}",
+                parent=self.root,
+            )
+            return None
+        return max(1, min(1000, val))
+
+    def _get_selected_subjects(self) -> list[str]:
+        """Return the subject keys checked in the advanced panel."""
+        subjects: list[str] = []
+        if self.adv_chinese_var.get():
+            subjects.append("chinese")
+        if self.adv_math_var.get():
+            subjects.append("math")
+        if self.adv_english_var.get():
+            subjects.append("english")
+        return subjects
+
+    # ------------------------------------------------------------------
+    # Handlers
+    # ------------------------------------------------------------------
+
+    def _handle_basic_mode(self) -> None:
+        """Basic mode: generate all three subjects into a single merged PDF."""
+        math_max = self._validate_math_max()
+        if math_max is None:
+            return
+
+        level = self.level_var.get().strip().upper() or "A1"
+        hanzi_level = self.hanzi_level_var.get().strip() or "初级"
+
+        try:
+            paths = generate_homework(
+                subjects=["chinese", "math", "english"],
+                output_mode="merged",
+                hanzi_level=hanzi_level,
+                math_max=math_max,
+                english_level=level,
+            )
         except DependencyError as exc:
             messagebox.showerror("缺少依赖", str(exc), parent=self.root)
+            return
         except FileNotFoundError as exc:
             messagebox.showerror("文件缺失", str(exc), parent=self.root)
-        except Exception as exc:  # pragma: no cover
+            return
+        except Exception as exc:
             messagebox.showerror(
                 "生成失败",
-                f"生成{subject_label}时出现错误：\n{exc}",
+                f"生成每日作业时出现错误：\n{exc}",
                 parent=self.root,
             )
-        else:
+            return
+
+        if paths:
             messagebox.showinfo(
                 "生成成功",
-                f"已生成{subject_label}：\n{output_path}",
+                f"已生成每日作业：\n{paths[0]}",
                 parent=self.root,
             )
 
-    def _handle_chinese(self) -> None:
-        self._run_generator(generate_chinese_homework, "语文")
+    def _handle_advanced_mode(self) -> None:
+        """Advanced mode: generate only the checked subjects with expanded counts."""
+        subjects = self._get_selected_subjects()
+        if not subjects:
+            messagebox.showwarning(
+                "未选择科目",
+                "请在高级选项中至少勾选一个科目（语文、数学或英语）。",
+                parent=self.root,
+            )
+            return
 
-    def _handle_math(self) -> None:
-        self._run_generator(generate_math_homework, "数学")
+        # Only validate math if math is checked
+        math_max = 100
+        if "math" in subjects:
+            val = self._validate_math_max()
+            if val is None:
+                return
+            math_max = val
 
-    def _handle_english(self) -> None:
         level = self.level_var.get().strip().upper() or "A1"
-        self._run_generator(lambda: generate_english_homework(level), "英语")
+        hanzi_level = self.hanzi_level_var.get().strip() or "初级"
+        output_mode = self.adv_output_mode.get()
+
+        try:
+            paths = generate_homework(
+                subjects=subjects,
+                output_mode=output_mode,
+                hanzi_level=hanzi_level,
+                math_max=math_max,
+                english_level=level,
+                chinese_count=10,
+                math_count=60,
+                math_columns=3,
+                english_count=10,
+            )
+        except DependencyError as exc:
+            messagebox.showerror("缺少依赖", str(exc), parent=self.root)
+            return
+        except FileNotFoundError as exc:
+            messagebox.showerror("文件缺失", str(exc), parent=self.root)
+            return
+        except Exception as exc:
+            messagebox.showerror(
+                "生成失败",
+                f"生成作业时出现错误：\n{exc}",
+                parent=self.root,
+            )
+            return
+
+        if paths:
+            path_lines = "\n".join(str(p) for p in paths)
+            messagebox.showinfo(
+                "生成成功",
+                f"已生成 {len(paths)} 个作业文件：\n{path_lines}",
+                parent=self.root,
+            )
+
+    # ------------------------------------------------------------------
+    # Launch
+    # ------------------------------------------------------------------
 
     def run(self) -> None:
         self.root.mainloop()
 
 
-
-
-
-
-
-
-
-
-
-
-def generate_with_math_limit(level: str, hanzi_level: str, max_str: str) -> Path:
-    try:
-        max_n = int((max_str or "100").strip())
-    except Exception:
-        max_n = 100
-    max_n = max(1, min(1000, max_n))
-    return generate_daily_homework_bundle(level, hanzi_level, max_n)
-
-
+# ===================================================================
+# Entry point
+# ===================================================================
 
 def main(argv: Iterable[str] | None = None) -> int:
+    """Run the homework generator GUI application."""
     app = HomeworkGeneratorApp()
     app.run()
     return 0
 
+
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
