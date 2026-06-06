@@ -5,6 +5,7 @@
 <img width="864" height="903" alt="image" src="https://github.com/user-attachments/assets/8f982239-340c-491c-9748-3997ca7dfc40" />
 
 ## 2026/06/06 功能更新
+使用Claude Code with deepseek v4 pro进行了V2.0的更新。
 - 更新了UI的设计，使其看起来更加现代化。
 - 增加了高级选项，因为之前的作业对于上小学一年级的小马来说太少了。
 - 现在高级模式是十个汉字+十个英语单词+60道数学题。
